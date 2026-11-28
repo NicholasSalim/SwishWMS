@@ -1,0 +1,1110 @@
+// Prisma schema — SwishWMS
+// Generators
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Datasource
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// IDENTITY / ACCESS
+// ============================================================================
+
+model User {
+  id             String   @id @default(uuid())
+  employeeId     String   @unique
+  email          String   @unique
+  name           String?
+  passwordHash   String
+  status         UserStatus @default(ACTIVE)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  deactivatedAt  DateTime?
+  deactivatedBy  String?
+  createdBy      String?
+
+  roles          UserRole[]
+  warehouses     UserWarehouse[]
+  sessions       Session[]
+  passwordResetTokens PasswordResetToken[]
+  emailVerificationTokens EmailVerificationToken[]
+  auditLogs      AuditLog[]
+
+  // Inventory movement actor
+  movements      InventoryMovement[]
+
+  // Inventory adjustments
+  adjustmentRequests InventoryAdjustment[] @relation("AdjustmentRequester")
+  adjustmentApprovals InventoryAdjustment[] @relation("AdjustmentApprover")
+
+  // Receiving / putaway employees
+  receivings Receiving[]
+  putawayTasks PutawayTask[]
+
+  // Outbound employees
+  pickingLists PickingList[]
+  packings Packing[]
+  dispatches Dispatch[]
+
+  // Stock control
+  stockCounts StockCount[]
+  stockCountRecounts StockCountRecount[]
+  returns Return[]
+
+  // Approvals
+  approvalRequests Approval[] @relation("ApprovalRequester")
+  approvalsApproved Approval[] @relation("ApprovalApprover")
+
+  // Notifications
+  notifications Notification[]
+
+  @@map("users")
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  tokenHash    String   @unique
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userAgent    String?
+  ip           String?
+  lastActivity DateTime @default(now())
+  expiresAt    DateTime
+  revokedAt    DateTime?
+
+  @@map("sessions")
+}
+
+model Role {
+  id          String    @id @default(uuid())
+  name        String    @unique
+  code        String    @unique
+  description String?
+
+  userRoles   UserRole[]
+  rolePermissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  code        String   @unique
+  resource    String
+  action      String
+  description String?
+
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+}
+
+model UserRole {
+  id        String   @id @default(uuid())
+  userId    String
+  roleId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@map("user_roles")
+}
+
+model RolePermission {
+  id           String   @id @default(uuid())
+  roleId       String
+  permissionId String
+  role         Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserWarehouse {
+  id         String   @id @default(uuid())
+  userId     String
+  warehouseId String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  warehouse  Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, warehouseId])
+  @@map("user_warehouses")
+}
+
+model PasswordResetToken {
+  id        String   @id @default(uuid())
+  tokenHash String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  @@map("password_reset_tokens")
+}
+
+model EmailVerificationToken {
+  id        String   @id @default(uuid())
+  tokenHash String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  newEmail  String
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  @@map("email_verification_tokens")
+}
+
+// ============================================================================
+// WAREHOUSE / MASTER DATA
+// ============================================================================
+
+model Warehouse {
+  id          String      @id @default(uuid())
+  code        String      @unique
+  name        String
+  address     String?
+  isDefault   Boolean     @default(false)
+  timezone    String      @default("Asia/Jakarta")
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  locations   WarehouseLocation[]
+  zones       WarehouseZone[]
+  users       UserWarehouse[]
+  movements   InventoryMovement[]
+  balances    InventoryBalance[]
+  stockCounts StockCount[]
+  documentSequences DocumentSequence[]
+
+  // Internal transfers
+  sourceWarehouseTransfers InternalTransfer[] @relation("SourceWarehouse")
+  destWarehouseTransfers InternalTransfer[] @relation("DestWarehouse")
+
+  // Delivery orders
+  deliveryOrders DeliveryOrder[]
+
+  // Sales orders
+  salesOrders SalesOrder[]
+
+  // Inbound deliveries
+  inboundDeliveries InboundDelivery[]
+
+  // Purchase orders
+  purchaseOrders PurchaseOrder[]
+
+  // Reservations
+  reservations InventoryReservation[]
+
+  @@map("warehouses")
+}
+
+model WarehouseZone {
+  id          String   @id @default(uuid())
+  warehouseId String
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  code        String
+  name        String
+
+  locations   WarehouseLocation[]
+
+  @@unique([warehouseId, code])
+  @@map("warehouse_zones")
+}
+
+model WarehouseLocation {
+  id          String   @id @default(uuid())
+  warehouseId String
+  zoneId      String?
+  warehouse   Warehouse   @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  zone        WarehouseZone? @relation(fields: [zoneId], references: [id], onDelete: SetNull)
+  code        String    // unique within warehouse
+  type        LocationType
+  aisle       String?
+  rack        String?
+  shelf       String?
+  bin         String?
+
+  movements   InventoryMovement[]
+  balances    InventoryBalance[]
+  stockCountItems StockCountItem[]
+  putawayTasks PutawayTask[]
+  pickingTasks PickingTask[]
+
+  // Internal transfer locations
+  sourceLocationTransfers InternalTransfer[] @relation("SourceLocation")
+  destLocationTransfers InternalTransfer[] @relation("DestLocation")
+
+  // Reservations
+  reservations InventoryReservation[]
+  adjustmentItems InventoryAdjustmentItem[]
+
+  @@unique([warehouseId, code])
+  @@map("warehouse_locations")
+}
+
+enum LocationType {
+  RECEIVING
+  STAGING
+  STORAGE
+  QUARANTINE
+  DISPATCH
+}
+
+model Product {
+  id                 String   @id @default(uuid())
+  sku                String   @unique
+  name               String
+  categoryId         String?
+  category           ProductCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  defaultUomId       String
+  defaultUom         UnitOfMeasure @relation(fields: [defaultUomId], references: [id])
+  isTrackedByBatch   Boolean  @default(false)
+  isTrackedByExpiry  Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  barcodes           ProductBarcode[]
+  movements          InventoryMovement[]
+  balances           InventoryBalance[]
+  batches            ProductBatch[]
+  purchaseOrderItems PurchaseOrderItem[]
+  salesOrderItems    SalesOrderItem[]
+  stockCountItems    StockCountItem[]
+  receivingItems     ReceivingItem[]
+  pickingTasks       PickingTask[]
+  reservations       InventoryReservation[]
+  adjustmentItems    InventoryAdjustmentItem[]
+  transferItems      InternalTransferItem[]
+  returnItems        ReturnItem[]
+  discrepancies      Discrepancy[]
+
+  @@map("products")
+}
+
+model ProductCategory {
+  id          String   @id @default(uuid())
+  code        String   @unique
+  name        String
+  description String?
+
+  products    Product[]
+
+  @@map("product_categories")
+}
+
+model ProductBarcode {
+  id        String   @id @default(uuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  barcode   String   @unique
+  type      BarcodeType @default(EAN13)
+  isPrimary Boolean  @default(false)
+
+  @@map("product_barcodes")
+}
+
+enum BarcodeType {
+  EAN13
+  CODE128
+  QR
+  GS1_128
+  SSCC
+}
+
+model UnitOfMeasure {
+  id          String   @id @default(uuid())
+  code        String   @unique // Pcs, Box, Karton, Dus, Pallet
+  name        String
+  isBase      Boolean  @default(false)
+
+  conversionsFrom UnitConversion[] @relation("fromUom")
+  conversionsTo   UnitConversion[] @relation("toUom")
+  products      Product[]
+
+  @@map("units_of_measure")
+}
+
+model UnitConversion {
+  id          String   @id @default(uuid())
+  fromUomId   String
+  fromUom     UnitOfMeasure @relation("fromUom", fields: [fromUomId], references: [id], onDelete: Cascade)
+  toUomId     String
+  toUom       UnitOfMeasure @relation("toUom", fields: [toUomId], references: [id], onDelete: Cascade)
+  factor      Decimal  // 1 fromUom = factor toUom
+
+  @@unique([fromUomId, toUomId])
+  @@map("unit_conversions")
+}
+
+model Supplier {
+  id         String   @id @default(uuid())
+  code       String   @unique
+  name       String
+  contact    String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  purchaseOrders PurchaseOrder[]
+
+  @@map("suppliers")
+}
+
+model Customer {
+  id         String   @id @default(uuid())
+  code       String   @unique
+  name       String
+  contact    String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  salesOrders SalesOrder[]
+
+  @@map("customers")
+}
+
+model ProductBatch {
+  id         String   @id @default(uuid())
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  batchNo    String
+  expiryDate DateTime?
+
+  movements  InventoryMovement[]
+  balances   InventoryBalance[]
+
+  @@unique([productId, batchNo])
+  @@map("product_batches")
+}
+
+// ============================================================================
+// INBOUND
+// ============================================================================
+
+model PurchaseOrder {
+  id          String           @id @default(uuid())
+  poNumber    String           @unique
+  supplierId  String
+  supplier    Supplier         @relation(fields: [supplierId], references: [id])
+  warehouseId String
+  warehouse   Warehouse        @relation(fields: [warehouseId], references: [id])
+  status      POStatus         @default(DRAFT)
+  expectedAt  DateTime?
+  createdBy   String
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  items       PurchaseOrderItem[]
+  deliveries  InboundDelivery[]
+
+  @@map("purchase_orders")
+}
+
+enum POStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+}
+
+model PurchaseOrderItem {
+  id         String   @id @default(uuid())
+  poId       String
+  po         PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id])
+  qtyOrdered Decimal    @db.Decimal(18, 4)
+  qtyReceived Decimal    @db.Decimal(18, 4) @default(0)
+
+  receivingItems ReceivingItem[]
+
+  @@map("purchase_order_items")
+}
+
+model InboundDelivery {
+  id          String           @id @default(uuid())
+  deliveryNumber String      @unique
+  poId        String
+  po          PurchaseOrder   @relation(fields: [poId], references: [id])
+  warehouseId String
+  warehouse   Warehouse       @relation(fields: [warehouseId], references: [id])
+  status      DeliveryStatus  @default(PENDING)
+  receivedAt  DateTime?
+  createdAt   DateTime        @default(now())
+
+  receiving   Receiving[]
+
+  @@map("inbound_deliveries")
+}
+
+enum DeliveryStatus {
+  PENDING
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+}
+
+model Receiving {
+  id          String          @id @default(uuid())
+  deliveryId  String
+  delivery    InboundDelivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  employeeId  String
+  employee    User            @relation(fields: [employeeId], references: [id])
+  status      ReceivingStatus @default(OPEN)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  items       ReceivingItem[]
+  grn         GoodsReceiptNote?
+  discrepancies Discrepancy[]
+
+  @@map("receivings")
+}
+
+enum ReceivingStatus {
+  OPEN
+  COMPLETED
+  CLOSED
+}
+
+model ReceivingItem {
+  id           String   @id @default(uuid())
+  receivingId  String
+  receiving    Receiving @relation(fields: [receivingId], references: [id], onDelete: Cascade)
+  poItemId     String?
+  poItem       PurchaseOrderItem? @relation(fields: [poItemId], references: [id])
+  productId    String
+  product      Product   @relation(fields: [productId], references: [id])
+  qtyExpected  Decimal   @db.Decimal(18, 4)
+  qtyActual    Decimal   @db.Decimal(18, 4) @default(0)
+  condition    ItemCondition @default(GOOD)
+  discrepancy  Decimal   @db.Decimal(18, 4) @default(0)
+
+  putawayTasks PutawayTask[]
+
+  @@map("receiving_items")
+}
+
+enum ItemCondition {
+  GOOD
+  DAMAGED
+  MISSING
+  EXCESS
+}
+
+model GoodsReceiptNote {
+  id          String   @id @default(uuid())
+  grnNumber   String   @unique
+  receivingId String   @unique
+  receiving   Receiving @relation(fields: [receivingId], references: [id])
+  postedAt    DateTime?
+  postedBy    String?
+
+  @@map("goods_receipt_notes")
+}
+
+model Discrepancy {
+  id          String   @id @default(uuid())
+  receivingId String
+  receiving   Receiving @relation(fields: [receivingId], references: [id])
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id])
+  qtyDifference Decimal @db.Decimal(18, 4)
+  type        DiscrepancyType
+  status      DiscrepancyStatus @default(PENDING)
+  approvedBy  String?
+  approvedAt  DateTime?
+
+  @@map("discrepancies")
+}
+
+enum DiscrepancyType {
+  MISSING
+  DAMAGED
+  EXCESS
+}
+
+enum DiscrepancyStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model PutawayTask {
+  id           String   @id @default(uuid())
+  receivingItemId String
+  receivingItem ReceivingItem @relation(fields: [receivingItemId], references: [id], onDelete: Cascade)
+  targetLocationId String
+  targetLocation WarehouseLocation @relation(fields: [targetLocationId], references: [id])
+  employeeId     String
+  employee       User    @relation(fields: [employeeId], references: [id])
+  status         PutawayStatus @default(PENDING)
+  qty            Decimal @db.Decimal(18, 4)
+  createdAt      DateTime @default(now())
+  completedAt    DateTime?
+
+  @@map("putaway_tasks")
+}
+
+enum PutawayStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+// ============================================================================
+// INVENTORY
+// ============================================================================
+
+model InventoryMovement {
+  id            String   @id @default(uuid())
+  warehouseId   String
+  warehouse     Warehouse @relation(fields: [warehouseId], references: [id])
+  locationId    String
+  location      WarehouseLocation @relation(fields: [locationId], references: [id])
+  productId     String
+  product       Product  @relation(fields: [productId], references: [id])
+  batchId       String?
+  batch         ProductBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  qty           Decimal  @db.Decimal(18, 4)
+  status        InventoryStatus
+  type          MovementType
+  referenceType String?    // e.g. "receiving", "picking", "adjustment", "transfer"
+  referenceId   String?
+  actorId       String
+  actor         User     @relation(fields: [actorId], references: [id])
+  createdAt     DateTime @default(now())
+  idempotencyKey String? @unique
+
+  @@index([warehouseId, locationId, productId])
+  @@index([referenceType, referenceId])
+  @@index([idempotencyKey])
+  @@map("inventory_movements")
+}
+
+enum InventoryStatus {
+  AVAILABLE
+  RESERVED
+  QUARANTINE
+  DAMAGED
+  STAGED
+  IN_TRANSIT
+}
+
+enum MovementType {
+  RECEIPT
+  ISSUE
+  RESERVATION
+  RELEASE
+  ADJUSTMENT
+  TRANSFER
+}
+
+model InventoryBalance {
+  id            String   @id @default(uuid())
+  warehouseId   String
+  locationId    String
+  productId     String
+  batchId       String?
+  status        InventoryStatus
+  qtyOnHand     Decimal  @db.Decimal(18, 4)
+  qtyReserved   Decimal  @db.Decimal(18, 4) @default(0)
+  qtyAvailable  Decimal  @db.Decimal(18, 4) @default(0)
+  updatedAt     DateTime @updatedAt
+
+  warehouse     Warehouse @relation(fields: [warehouseId], references: [id])
+  location      WarehouseLocation @relation(fields: [locationId], references: [id])
+  product       Product  @relation(fields: [productId], references: [id])
+  batch         ProductBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+
+  @@unique([warehouseId, locationId, productId, batchId, status])
+  @@map("inventory_balances")
+}
+
+model InventoryReservation {
+  id          String   @id @default(uuid())
+  salesOrderId String?
+  salesOrder   SalesOrder? @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  pickingTaskId String?
+  pickingTask  PickingTask? @relation(fields: [pickingTaskId], references: [id], onDelete: Cascade)
+  productId    String
+  product      Product @relation(fields: [productId], references: [id])
+  locationId   String
+  location     WarehouseLocation @relation(fields: [locationId], references: [id])
+  warehouseId  String
+  warehouse    Warehouse @relation(fields: [warehouseId], references: [id])
+  qty          Decimal  @db.Decimal(18, 4)
+  expiresAt    DateTime?
+
+  @@map("inventory_reservations")
+}
+
+model InventoryAdjustment {
+  id          String   @id @default(uuid())
+  adjustmentNumber String @unique
+  requesterId String
+  requester   User     @relation("AdjustmentRequester", fields: [requesterId], references: [id])
+  approverId  String?
+  approver    User?    @relation("AdjustmentApprover", fields: [approverId], references: [id])
+  status      AdjustmentStatus @default(PENDING)
+  reason      String
+  postedAt    DateTime?
+
+  items       InventoryAdjustmentItem[]
+
+  @@map("inventory_adjustments")
+}
+
+enum AdjustmentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  POSTED
+}
+
+model InventoryAdjustmentItem {
+  id          String   @id @default(uuid())
+  adjustmentId String
+  adjustment  InventoryAdjustment @relation(fields: [adjustmentId], references: [id], onDelete: Cascade)
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id])
+  locationId  String
+  location    WarehouseLocation @relation(fields: [locationId], references: [id])
+  qtyBefore   Decimal  @db.Decimal(18, 4)
+  qtyAfter    Decimal  @db.Decimal(18, 4)
+  difference  Decimal  @db.Decimal(18, 4)
+
+  @@map("inventory_adjustment_items")
+}
+
+// ============================================================================
+// OUTBOUND
+// ============================================================================
+
+model SalesOrder {
+  id          String   @id @default(uuid())
+  soNumber    String   @unique
+  customerId  String
+  customer    Customer @relation(fields: [customerId], references: [id])
+  warehouseId String
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+  status      SOStatus @default(DRAFT)
+  createdBy   String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  items       SalesOrderItem[]
+  deliveryOrders DeliveryOrder[]
+  reservations InventoryReservation[]
+
+  @@map("sales_orders")
+}
+
+enum SOStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  PARTIALLY_FULFILLED
+  FULFILLED
+  CANCELLED
+}
+
+model SalesOrderItem {
+  id         String   @id @default(uuid())
+  soId       String
+  so         SalesOrder @relation(fields: [soId], references: [id], onDelete: Cascade)
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id])
+  qtyOrdered Decimal   @db.Decimal(18, 4)
+  qtyReserved Decimal   @db.Decimal(18, 4) @default(0)
+
+  @@map("sales_order_items")
+}
+
+model DeliveryOrder {
+  id          String   @id @default(uuid())
+  doNumber    String   @unique
+  soId        String
+  so          SalesOrder @relation(fields: [soId], references: [id])
+  warehouseId String
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+  status      DOStatus @default(DRAFT)
+  createdAt   DateTime @default(now())
+
+  pickingLists PickingList[]
+  shipment    Shipment?
+
+  @@map("delivery_orders")
+}
+
+enum DOStatus {
+  DRAFT
+  CONFIRMED
+  PICKING
+  PACKED
+  STAGED
+  DISPATCHED
+  CANCELLED
+}
+
+model PickingList {
+  id          String   @id @default(uuid())
+  listNumber  String   @unique
+  doId        String
+  do          DeliveryOrder @relation(fields: [doId], references: [id], onDelete: Cascade)
+  employeeId  String
+  employee    User     @relation(fields: [employeeId], references: [id])
+  status      PickingListStatus @default(OPEN)
+  createdAt   DateTime @default(now())
+
+  tasks       PickingTask[]
+
+  @@map("picking_lists")
+}
+
+enum PickingListStatus {
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model PickingTask {
+  id           String   @id @default(uuid())
+  pickingListId String
+  pickingList  PickingList @relation(fields: [pickingListId], references: [id], onDelete: Cascade)
+  productId    String
+  product      Product  @relation(fields: [productId], references: [id])
+  locationId   String
+  location     WarehouseLocation @relation(fields: [locationId], references: [id])
+  qty          Decimal  @db.Decimal(18, 4)
+  status       PickingTaskStatus @default(PENDING)
+
+  items        PickingItem[]
+  reservations InventoryReservation[]
+
+  @@map("picking_tasks")
+}
+
+enum PickingTaskStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model PickingItem {
+  id          String   @id @default(uuid())
+  pickingTaskId String
+  pickingTask PickingTask @relation(fields: [pickingTaskId], references: [id], onDelete: Cascade)
+  scannedQty  Decimal  @db.Decimal(18, 4) @default(0)
+  confirmedQty Decimal @db.Decimal(18, 4) @default(0)
+
+  @@map("picking_items")
+}
+
+model Packing {
+  id          String   @id @default(uuid())
+  orderId     String   // delivery order id
+  packageId   String?
+  package     Package? @relation(fields: [packageId], references: [id], onDelete: SetNull)
+  employeeId  String
+  employee    User     @relation(fields: [employeeId], references: [id])
+  dimensions  String?
+  weight      Decimal  @db.Decimal(10, 3)
+  createdAt   DateTime @default(now())
+
+  @@map("packings")
+}
+
+model Package {
+  id            String   @id @default(uuid())
+  trackingNumber String  @unique
+  dimensions    String?
+  weight        Decimal  @db.Decimal(10, 3)
+  packings      Packing[]
+  shipmentId    String?
+  shipment      Shipment? @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
+
+  @@map("packages")
+}
+
+model Shipment {
+  id          String   @id @default(uuid())
+  shipmentNumber String @unique
+  doId        String   @unique
+  do          DeliveryOrder @relation(fields: [doId], references: [id])
+  carrier     String?
+  status      ShipmentStatus @default(PREPARED)
+  createdAt   DateTime @default(now())
+
+  dispatch    Dispatch?
+  packages    Package[]
+  proofOfDelivery ProofOfDelivery?
+
+  @@map("shipments")
+}
+
+enum ShipmentStatus {
+  PREPARED
+  DISPATCHED
+  IN_TRANSIT
+  DELIVERED
+  EXCEPTION
+}
+
+model Dispatch {
+  id             String   @id @default(uuid())
+  shipmentId     String   @unique
+  shipment       Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  employeeId     String
+  employee       User     @relation(fields: [employeeId], references: [id])
+  dispatchedAt   DateTime?
+  suratJalanNumber String?
+
+  @@map("dispatches")
+}
+
+model ProofOfDelivery {
+  id           String   @id @default(uuid())
+  shipmentId   String   @unique
+  shipment     Shipment @relation(fields: [shipmentId], references: [id])
+  deliveredAt  DateTime?
+  recipient    String?
+  signatureUrl String?
+
+  @@map("proof_of_deliveries")
+}
+
+// ============================================================================
+// CONTROL / OTHER
+// ============================================================================
+
+model StockCount {
+  id          String   @id @default(uuid())
+  countNumber String   @unique
+  warehouseId String
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+  employeeId  String
+  employee    User     @relation(fields: [employeeId], references: [id])
+  status      StockCountStatus @default(OPEN)
+  countedAt   DateTime?
+
+  items       StockCountItem[]
+
+  @@map("stock_counts")
+}
+
+enum StockCountStatus {
+  OPEN
+  COUNTING
+  DISCREPANCY_REVIEW
+  APPROVED
+  POSTED
+  CANCELLED
+}
+
+model StockCountItem {
+  id          String   @id @default(uuid())
+  countId     String
+  count       StockCount @relation(fields: [countId], references: [id], onDelete: Cascade)
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id])
+  locationId  String
+  location    WarehouseLocation @relation(fields: [locationId], references: [id])
+  qtySystem   Decimal  @db.Decimal(18, 4)
+  qtyCounted  Decimal  @db.Decimal(18, 4) @default(0)
+  difference  Decimal  @db.Decimal(18, 4) @default(0)
+
+  recounts    StockCountRecount[]
+
+  @@map("stock_count_items")
+}
+
+model StockCountRecount {
+  id          String   @id @default(uuid())
+  countItemId String
+  countItem   StockCountItem @relation(fields: [countItemId], references: [id], onDelete: Cascade)
+  employeeId  String
+  employee    User     @relation(fields: [employeeId], references: [id])
+  qtyCounted  Decimal  @db.Decimal(18, 4)
+  reason      String?
+  countedAt   DateTime @default(now())
+
+  @@map("stock_count_recounts")
+}
+
+model InternalTransfer {
+  id             String   @id @default(uuid())
+  transferNumber String   @unique
+  sourceWarehouseId String
+  destWarehouseId   String
+  sourceWarehouse  Warehouse @relation("SourceWarehouse", fields: [sourceWarehouseId], references: [id])
+  destWarehouse    Warehouse @relation("DestWarehouse", fields: [destWarehouseId], references: [id])
+  sourceLocationId String?
+  destLocationId   String?
+  sourceLocation   WarehouseLocation? @relation("SourceLocation", fields: [sourceLocationId], references: [id])
+  destLocation     WarehouseLocation? @relation("DestLocation", fields: [destLocationId], references: [id])
+  status         TransferStatus @default(DRAFT)
+  createdAt      DateTime @default(now())
+
+  items InternalTransferItem[]
+
+  @@map("internal_transfers")
+}
+
+enum TransferStatus {
+  DRAFT
+  SUBMITTED
+  IN_TRANSIT
+  RECEIVED
+  COMPLETED
+  CANCELLED
+}
+
+model InternalTransferItem {
+  id          String   @id @default(uuid())
+  transferId  String
+  transfer    InternalTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id])
+  qty         Decimal  @db.Decimal(18, 4)
+  status      InternalTransferItemStatus @default(PENDING)
+
+  @@map("internal_transfer_items")
+}
+
+enum InternalTransferItemStatus {
+  PENDING
+  SHIPPED
+  RECEIVED
+  COMPLETED
+}
+
+model Return {
+  id               String   @id @default(uuid())
+  returnNumber     String   @unique
+  originalTransactionId String?
+  employeeId       String
+  employee         User     @relation(fields: [employeeId], references: [id])
+  status           ReturnStatus @default(OPEN)
+  inspectedAt      DateTime?
+
+  items ReturnItem[]
+
+  @@map("returns")
+}
+
+enum ReturnStatus {
+  OPEN
+  INSPECTING
+  COMPLETED
+  CANCELLED
+}
+
+model ReturnItem {
+  id         String   @id @default(uuid())
+  returnId   String
+  return     Return   @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id])
+  qty        Decimal  @db.Decimal(18, 4)
+  disposition ReturnDisposition
+
+  @@map("return_items")
+}
+
+enum ReturnDisposition {
+  RESTOCK
+  QUARANTINE
+  DAMAGED
+  SUPPLIER_RETURN
+  DISPOSAL
+}
+
+model Approval {
+  id          String   @id @default(uuid())
+  entityType  String
+  entityId    String
+  requestedBy String
+  requestedByUser User @relation("ApprovalRequester", fields: [requestedBy], references: [id])
+  approvedBy  String?
+  approvedByUser User? @relation("ApprovalApprover", fields: [approvedBy], references: [id])
+  status      ApprovalStatus @default(PENDING)
+  decidedAt   DateTime?
+
+  @@map("approvals")
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  actorId     String?
+  actor       User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  action      String
+  entity      String
+  entityId    String?
+  beforeJson  Json?
+  afterJson   Json?
+  context     Json?
+  ip          String?
+  createdAt   DateTime @default(now())
+
+  @@map("audit_logs")
+}
+
+model Attachment {
+  id          String   @id @default(uuid())
+  entityType  String
+  entityId    String
+  fileUrl     String
+  fileName    String
+  uploadedBy  String?
+  uploadedAt  DateTime @default(now())
+
+  @@map("attachments")
+}
+
+model Notification {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  type        String
+  title       String
+  message     String
+  readAt      DateTime?
+  createdAt   DateTime @default(now())
+
+  @@map("notifications")
+}
+
+model DocumentSequence {
+  id          String   @id @default(uuid())
+  warehouseId String
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+  docType     String
+  period      String   // e.g. "2026-11"
+  lastNumber  Int      @default(0)
+
+  @@unique([warehouseId, docType, period])
+  @@map("document_sequences")
+}
+
+enum UserStatus {
+  ACTIVE
+  DEACTIVATED
+  PENDING_ACTIVATION
+}
